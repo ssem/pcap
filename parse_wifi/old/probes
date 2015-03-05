@@ -1,0 +1,135 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import sqlite3
+import argparse
+from subprocess import PIPE
+from subprocess import Popen
+
+
+class Capture():
+    def __init__(self, iface):
+        self.nodes_ita = {}
+        exists = os.path.isfile('DB')
+        self.db = sqlite3.connect('DB')
+        self.ieee = {}
+        for line in open('ieee.db', 'r'):
+            for element in line.split(',,,'):
+                try:
+                    mac, comp = element.split('===')
+                    self.ieee[mac] = comp
+                except: pass
+        self.capture = self._start_capture(iface)
+        if not exists:
+            self._setup_tables()
+
+    def _setup_tables(self):
+        self.db.execute('create table prober(id integer primary key autoincrement, src char(20) not null unique, company char(100), name char(100));')
+        self.db.execute('create table probed(id integer primary key autoincrement, dest char(20) not null unique, essid char(100));')
+        self.db.execute('create table packet(timestamp char(20), signal int, channel int, prober_id int, probed_id int);')
+        self.db.commit()
+
+    def _start_capture(self, iface):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        airmon = Popen(['sudo', 'airmon-ng', 'start', iface], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        return Popen(['sudo', 'tcpdump', '-e', '-i', 'mon0'], stdout=PIPE, stderr=PIPE)
+
+    def _parse_probe(self, packet):
+        if "Probe Response" in packet:
+            return {'essid': packet.split("Probe Response (")[1].split(") ")[0],
+                    'dest': packet.split("BSSID:")[1].split(" (")[0],
+                    'signal': packet.split(" signal antenna")[0].split(" ")[-1],
+                    'channel': packet.split("CH: ")[1].split(",")[0].rstrip('\n'),
+                    'src': packet.split("Unknown) DA:")[1].split(" (oui")[0]}
+
+    def parse(self):
+        try:
+            last_printed = time.time()
+            while True:
+                line = self.capture.stdout.readline()
+                try:
+                    response = self._parse_probe(line)
+                except:
+                    print "[Error] could not parse\n\n%s" % line
+                if response:
+                    response['timestamp'] = time.time()
+                    try:
+                        response['company'] = self.ieee[response['src'][:8]]
+                    except:
+                        response['company'] = 'unknown'
+                    self._save_to_db(response)
+                    self._is_it_new(response)
+                    if time.time() - last_printed > 1:
+                        self._print_data(response)
+                        last_printed = time.time()
+        except KeyboardInterrupt:
+            pass
+
+    def _is_it_new(self, response):
+        probe_id, name = self.db.execute("select id, name from prober where src = ?;", (response['src'],)).fetchone()
+        if name != "none":
+            return
+        timestamp1 = self.db.execute("select max(timestamp) from packet where prober_id = ?", (probe_id,)).fetchone()[0]
+        timestamp2 = self.db.execute("select max(timestamp) from packet where prober_id = ? and timestamp < ?", (probe_id, timestamp1)).fetchone()[0]
+        if timestamp2 == None or time.time() - float(timestamp2) > 1800:
+            name = raw_input("\n%s\t%s\t%s\nEnter the name of the new node? " % (probe_id, response['src'], response['company']))
+            if len(name) < 1:
+                name = 'none'
+            self.db.execute("update prober set name=? where id=?;", (name, probe_id))
+            self.db.commit()
+            return True
+
+    def _print_data(self, response):
+        keepers = {}
+        ct = time.time()
+        self.nodes_ita[response['src']] = response
+        os.system('clear')
+        print '{:<10} {:<20} {:<15} {:<15} {:<20} {:<20}\n'.format('probe_id', 'name', 'timestamp', 'last seen', 'src', 'company')
+        for node in self.nodes_ita:
+            if ct - self.nodes_ita[node]['timestamp'] < 360:
+                keepers[node] = self.nodes_ita[node]
+                probe_id, name = self.db.execute("select id, name from prober where src = ?;", (self.nodes_ita[node]['src'],)).fetchone()
+                timestamp = self.db.execute("select max(timestamp) from packet where prober_id = ?", (probe_id,)).fetchone()[0]
+                last_seen = time.time() - float(timestamp)
+                timestamp = time.strftime("%H:%M:%S", time.localtime(float(timestamp)))
+                last_seen = time.strftime("%M:%S", time.localtime(float(last_seen)))
+                print '{:<10} {:<20} {:<15} {:<15} {:<20} {:<25}'.format(probe_id, name, timestamp, last_seen, self.nodes_ita[node]['src'], self.nodes_ita[node]['company'])
+        self.nodes_ita = keepers
+
+    def _save_to_db(self, response):
+        try:
+            self.db.execute("insert into prober (src, name, company) values (?, ?, ?)",
+                (response['src'], 'none', response['company']))
+        except sqlite3.IntegrityError:
+            pass
+        try:
+            self.db.execute("insert into probed (dest, essid) values (?, ?)",
+                (response['dest'], response['essid']))
+        except sqlite3.IntegrityError:
+            pass
+        self.db.commit()
+        prober_id = self.db.execute("select id from prober where src = (?)", (response['src'],)).fetchone()[0]
+        probed_id = self.db.execute("select id from probed where dest = (?)", (response['dest'],)).fetchone()[0]
+        signal = int(response['signal'].rstrip('dB'))
+        self.db.execute("insert into packet (timestamp, signal, channel, prober_id, probed_id) values (?, ?, ?, ?, ?)",
+            (response['timestamp'], signal, int(response['channel']), prober_id, probed_id))
+        self.db.commit()
+
+    def __exit__(self):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        print '\n\tThanks for using my script'
+
+
+if __name__ == "__main__":
+    parse = argparse.ArgumentParser()
+    parse.add_argument('iface', help='interface to grab capture from')
+    parse.add_argument('--routers', help='display routers near me')
+    args = parse.parse_args()
+
+    capture = Capture(args.iface)
+    capture.parse()

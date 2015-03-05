@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+
+import os
+import re
+import sys
+import argparse
+import operator
+import subprocess
+
+class Capture():
+    def __init__(self, iface):
+        self.mac = self._find_my_mac(iface)
+        self.capture = self._start_capture(iface)
+        self.log = {}
+
+    def _start_capture(self, iface):
+        #sys.stdout.write('[\033[32m+\033[0m] %s Down\n' % iface)
+        #subprocess.call(['ifconfig', iface, 'down'],
+        #    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        #sys.stdout.write('[\033[32m+\033[0m] %s Up\n' % iface)
+        #subprocess.call(['ifconfig', iface, 'up'],
+        #    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return subprocess.Popen(['tcpdump', '-e', '-i', iface],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def _find_my_mac(self, iface):
+        ifconfig = subprocess.Popen(['ifconfig', iface],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[0]
+        match = re.search('(([a-z]|[A-Z]|[0-9]){2}:){5}([a-z]|[A-Z]|[0-9]){2}', ifconfig)
+        if match is None:
+            sys.exit('Can not parse mac from interface')
+        mac = ifconfig[match.start():match.end()]
+        sys.stdout.write('[\033[32m+\033[0m] %s \n' % mac)
+        return mac
+
+    def _parse_packet(self, packet):
+        packet = packet.split(' ')
+        time = packet[0]
+        src_mac = packet[1]
+        dst_mac = packet[5]
+        ethertype = packet[9]
+        length = packet[12].rstrip(':')
+        src_domain = packet[13]
+        dst_domain = packet[15]
+        return {'time':time,
+                'src_mac':src_mac,
+                'dst_mac':dst_mac,
+                'ethertype':ethertype,
+                'length':length,
+                'src_domain':src_domain,
+                'dst_domain':dst_domain}
+
+    def parse(self, src=True, dst=True):
+        try:
+            while True:
+                packet = self.capture.stdout.readline()
+                # eliminate broadcast stuff
+                if self.mac not in packet:
+                    continue
+                # interested in only internet routeable
+                if 'ethertype IPv4' not in packet:
+                    continue
+                parsed_packet = self._parse_packet(packet)
+                if src is False:
+                    if parsed_packet['src_mac'] != self.mac:
+                        continue
+                if dst is False:
+                    if parsed_packet['dst_mac'] != self.mac:
+                        continue
+                self._pretty_print(parsed_packet)
+        except KeyboardInterrupt:
+            pass
+
+    def _pretty_print(self, packet):
+        # all this because I wanted to eliminate port numbers on my own domain
+        if self.mac in packet['src_mac']:
+            src = '.'.join(packet['src_domain'].split('.')[:-1])[:39]
+            dst = packet['dst_domain'][:39]
+        else:
+            src = packet['src_domain'][:39]
+            dst = '.'.join(packet['dst_domain'].split('.')[:-1])[:39]
+        key = '{:<40}{:<40}'.format(src, dst)
+        try:self.log[key] += 1
+        except:self.log[key] = 1
+        os.system('clear')
+        sorted_logs = sorted(self.log.items(), key=operator.itemgetter(1))
+        sys.stdout.write('{:<40}{:<40}{}\n'.format('src','dst','count'))
+        for key in reversed(sorted_logs):
+            sys.stdout.write('{}{}\n'.format(key[0], key[1]))
+
+
+def check_dep(prog):
+    try:
+        p = subprocess.Popen(['which', prog],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.wait()
+    except OSError:
+        sys.exit('which is not installed on your system\n')
+    if p.returncode != 0:
+        sys.exit('%s: is not installed on your system\n' % prog)
+
+
+if __name__ == "__main__":
+    parse = argparse.ArgumentParser()
+    parse.add_argument('iface', help='interface to grab capture from')
+    parse.add_argument('--src', action='store_false',
+        help='only show packets from me')
+    parse.add_argument('--dst', action='store_false',
+        help='only show packets to me')
+    args = parse.parse_args()
+    # check if root
+    if os.geteuid():
+        sys.exit("Sorry must run as root")
+    # check system deps
+    check_dep('airmon-ng')
+    check_dep('tcpdump')
+    # run capture
+    capture = Capture(args.iface)
+    capture.parse(src=args.src, dst=args.dst)

@@ -1,0 +1,95 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import sqlite3
+import argparse
+from subprocess import PIPE
+from subprocess import Popen
+
+
+class Capture():
+    def __init__(self, iface):
+        self._mac_to_company = self._build_mac_to_company_table()
+        self.capture = self._start_capture(iface)
+        self.channel = 0
+        self.iface = iface
+
+    def __exit__(self):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+
+    def _build_mac_to_company_table(self):
+        ieee = {}
+        for line in open('ieee.db', 'r'):
+            for element in line.split(',,,'):
+                try:
+                    mac, comp = element.split('===')
+                    ieee[mac] = comp
+                except: pass
+        return ieee
+
+    def _start_capture(self, iface):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        airmon = Popen(['sudo', 'airmon-ng', 'start', iface], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        return Popen(['sudo', 'tcpdump', '-e', '-i', 'mon0'], stdout=PIPE, stderr=PIPE)
+
+    def _report_incident(self, line):
+        sa = 'unknown'
+        da = 'unknown'
+        essid = 'unknown'
+        channel = 'unknown'
+        company = 'unknown'
+        try: sa = line.split(' SA:')[1].split(' ')[0]
+        except:pass
+        try: da = line.split(' DA:')[1].split(' ')[0]
+        except:pass
+        try: essid = line.split('Probe Request (')[1].split(') ')[0]
+        except:pass
+        try: essid = line.split('Probe Response (')[1].split(') ')[0]
+        except:pass
+        try: channel = line.split('signal antenna ')[1].split(' ')[0]
+        except:pass
+        try: channel = line.split('CH: ')[1].split(', ')[0]
+        except:pass
+        try:response['company'] = self._mac_to_company[da]
+        except:pass
+        try:response['company'] = self._mac_to_company[sa]
+        except:pass
+        timestamp = time.strftime("%H:%M:%S", time.localtime(time.time()))
+        print '{:<18} {:<18} {:<10} {:<5} {:<20} {:<15}'.format(
+            sa, da, timestamp, channel, essid, company)
+
+    def _channel_hop(self):
+        self.channel += 1
+        self.channel = self.channel % 12
+        iwconfig = Popen(['sudo', 'iwconfig', str(self.iface),
+            'channel', str(self.channel + 1)], stdout=PIPE, stderr=PIPE)
+        iwconfig.wait()
+
+    def collect(self, mac="00:00:00:00:00:00"):
+        os.system('clear')
+        print '{:<18} {:<18} {:<10} {:<5} {:<20} {:<15}\n'.format(
+            'src', 'dest', 'timestamp', 'channel', 'essid', 'company')
+        try:
+            ct = time.time()
+            while True:
+                line = self.capture.stdout.readline()
+                if str(mac) in line:
+                    self._report_incident(line)
+                if time.time() - ct > 1:
+                    self._channel_hop()
+                    ct = time.time()
+        except KeyboardInterrupt:
+            print '\n\tThanks for using my script'
+
+if __name__ == "__main__":
+    parse = argparse.ArgumentParser()
+    parse.add_argument('iface', help='interface to grab capture from')
+    parse.add_argument('mac', help='report when mac enters the area')
+    args = parse.parse_args()
+    capture = Capture(args.iface)
+    capture.collect(args.mac)

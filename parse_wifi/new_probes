@@ -1,0 +1,129 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import sqlite3
+import argparse
+from subprocess import PIPE
+from subprocess import Popen
+
+
+class Capture():
+    def __init__(self, iface):
+        exists = os.path.isfile('DB_new')
+        self.db = sqlite3.connect('DB_new')
+        if not exists:
+            self._create_tables()
+        self._mac_to_company = self._build_mac_to_company_table()
+        self.capture = self._start_capture(iface)
+        self.macs = list(self._load_saved_macs())
+        self.report = {}
+        self.channel = 0
+        self.iface = iface
+
+    def _create_tables(self):
+        self.db.execute('create table prober(id integer primary key autoincrement, src char(20) not null unique, company char(100), name char(100));')
+        self.db.execute('create table probed(id integer primary key autoincrement, dest char(20), essid char(100), unique(dest, essid));')
+        self.db.execute('create table packet(timestamp char(20), signal int, channel int, prober_id int, probed_id int);')
+        self.db.commit()
+
+    def _build_mac_to_company_table(self):
+        ieee = {}
+        for line in open('ieee.db', 'r'):
+            for element in line.split(',,,'):
+                try:
+                    mac, comp = element.split('===')
+                    ieee[mac] = comp
+                except: pass
+        return ieee
+
+    def _start_capture(self, iface):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        airmon = Popen(['sudo', 'airmon-ng', 'start', iface], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        return Popen(['sudo', 'tcpdump', '-e', '-i', 'mon0'], stdout=PIPE, stderr=PIPE)
+
+    def _load_saved_macs(self):
+        for mac in self.db.execute('select src from prober;'):
+            yield mac[0]
+
+    def _parse_probe(self, packet):
+        if "Probe Request" in packet:
+            return {'essid': packet.split("Probe Request (")[1].split(") ")[0],
+                    'dest': 'Broadcast',
+                    'signal': packet.split(" signal antenna")[0].split(" ")[-1],
+                    'channel': packet.split("signal antenna ")[1].split(" BSSID")[0],
+                    'src': packet.split(" SA:")[1].split(" (oui")[0]}
+
+    def _is_it_new(self, response):
+        if response['src'] in self.macs:
+            return False
+        return True
+
+    def _save_to_db(self, response):
+        try:
+            self.db.execute("insert into prober (src, name, company) values (?, ?, ?)",
+                (response['src'], 'none', response['company']))
+        except sqlite3.IntegrityError:
+            pass
+        try:
+            self.db.execute("insert into probed (dest, essid) values (?, ?)",
+                (response['dest'], response['essid']))
+        except sqlite3.IntegrityError:
+            pass
+        self.db.commit()
+        prober_id = self.db.execute("select id from prober where src = (?)", (response['src'],)).fetchone()[0]
+        probed_id = self.db.execute("select id from probed where dest = (?) and essid = (?)", (response['dest'],response['essid'])).fetchone()[0]
+        signal = int(response['signal'].rstrip('dB'))
+        self.db.execute("insert into packet (timestamp, signal, channel, prober_id, probed_id) values (?, ?, ?, ?, ?)",
+            (response['timestamp'], signal, int(response['channel']), prober_id, probed_id))
+        self.db.commit()
+
+    def _report_incident(self):
+        os.system('clear')
+        print '{:<20} {:<20} {:<15} {:<10} {:<5} {:<15}\n'.format('src', 'dest', 'essid', 'timestamp', 'channel', 'company')
+        for individual in self.report:
+            r = self.report[individual]
+            timestamp = time.strftime("%H:%M:%S", time.localtime(float(r['timestamp'])))
+            print '{:<20} {:<20} {:<15} {:<10} {:<5} {:<15}'.format(r['src'], r['dest'], r['essid'], timestamp, r['channel'], r['company'])
+
+    def _channel_hop(self):
+        self.channel += 1
+        self.channel = self.channel % 12
+        iwconfig = Popen(['sudo', 'iwconfig', str(self.iface), 'channel', str(self.channel + 1)], stdout=PIPE, stderr=PIPE)
+        iwconfig.wait()
+
+    def collect(self, report=False):
+        try:
+            while True:
+                line = self.capture.stdout.readline()
+                self._channel_hop()
+                try:
+                    response = self._parse_probe(line)
+                except:
+                    reponse = None
+                    sys.stderr.write("[Error] could not parse\n\n%s" % line)
+                if response is not None and self._is_it_new(response):
+                    response['timestamp'] = time.time()
+                    try:
+                        response['company'] = self._mac_to_company[response['src'][:8]]
+                    except:
+                        response['company'] = 'unknown'
+                    if report:
+                        self.report[response['src']] = response
+                        self._report_incident()
+                    else:
+                        self.macs.append(response['src'])
+                        self._save_to_db(response)
+        except KeyboardInterrupt:
+            print '\n\tThanks for using my script'
+
+if __name__ == "__main__":
+    parse = argparse.ArgumentParser()
+    parse.add_argument('iface', help='interface to grab capture from')
+    parse.add_argument('--report', action='store_true', help='report each new probe')
+    args = parse.parse_args()
+    capture = Capture(args.iface)
+    capture.collect(args.report)

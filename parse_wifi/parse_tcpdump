@@ -1,0 +1,125 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import time
+import argparse
+from subprocess import PIPE
+from subprocess import Popen
+
+
+class Capture():
+    def __init__(self, iface):
+        self.capture = self._start_capture(iface)
+        self.responses = []
+
+    def _start_capture(self, iface):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        airmon = Popen(['sudo', 'airmon-ng', 'start', iface], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        return Popen(['sudo', 'tcpdump', '-e', '-i', 'mon0'], stdout=PIPE, stderr=PIPE)
+
+    def parse(self, functions):
+        try:
+            last_printed = time.time()
+            while True:
+                line = self.capture.stdout.readline()
+                for func in functions:
+                    try:
+                        response = func(line)
+                        if response:
+                            self._save(response)
+                    except:
+                        print "[Error] function %s could not parse\n\n%s" % (
+                            str(func), line)
+                if time.time() - last_printed > 1:
+                    self._clean_responses()
+                    self._pretty_print()
+                    last_printed = time.time()
+        except KeyboardInterrupt:
+            pass
+
+    def _save(self, response):
+        response['timestamp'] = time.time()
+        # unique on essid
+        if 'essid' in response:
+            for item in self.responses:
+                if item['essid'] == response['essid']:
+                    self.responses.remove(item)
+        self.responses.append(response)
+
+    def _clean_responses(self):
+        keepers = []
+        current_time = time.time()
+        for response in self.responses:
+            if current_time - response['timestamp'] < 20:
+                keepers.append(response)
+        self.responses = keepers
+
+    def _pretty_print(self):
+        pp = {}
+        # gathers all titles
+        for response in self.responses:
+            for title in response:
+                pp[title] = []
+        # add data to each title
+        for response in self.responses:
+            for title in pp:
+                if title in response:
+                    pp[title].append(response[title])
+                else:
+                    pp[title].append("NONE")
+        # calculate total size for iteration
+        size = 0
+        for title in pp:
+            size = len(pp[title])
+        os.system('clear')
+        # print titles
+        for title in pp:
+            sys.stdout.write('{:25}'.format(title))
+        print '\n'
+        # print data under titles
+        for x in xrange(size):
+            line = ''
+            for title in pp:
+                if title == 'timestamp':
+                    sys.stdout.write('{:25}'.format(time.strftime(
+                        '%H:%M:%S',time.localtime(pp[title][x]))))
+                else:
+                    sys.stdout.write('{:25}'.format(str(pp[title][x])))
+            print
+
+    def __exit__(self):
+        airmon = Popen(['sudo', 'airmon-ng', 'stop', 'mon0'], stdout=PIPE, stderr=PIPE)
+        airmon.wait()
+        print '\n\tThanks for using my script'
+
+
+def parse_beacon(packet):
+    if "Beacon" in packet:
+        return {'essid': packet.split("Beacon (")[1].split(") [")[0],
+                'bssid': packet.split("BSSID:")[1].split(" (")[0],
+                'signal': packet.split(" signal antenna")[0].split(" ")[-1],
+                'channel': packet.split("CH: ")[1].split(",")[0].rstrip('\n')}
+    return None
+
+def parse_probe(packet):
+    if "Probe Response" in packet:
+        return {'essid': packet.split("Probe Response (")[1].split(") ")[0],
+                'dest': packet.split("BSSID:")[1].split(" (")[0],
+                'signal': packet.split(" signal antenna")[0].split(" ")[-1],
+                'channel': packet.split("CH: ")[1].split(",")[0].rstrip('\n'),
+                'src': packet.split("Unknown) DA:")[1].split(" (oui")[0]}
+
+def print_all(packet):
+    print packet
+    return None
+
+if __name__ == "__main__":
+    parse = argparse.ArgumentParser()
+    parse.add_argument('iface', help='interface to grab capture from')
+    args = parse.parse_args()
+
+    capture = Capture(args.iface)
+    capture.parse([parse_probe])
