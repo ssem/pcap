@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+import re
+import sys
+import dpkt
+import socket
+import argparse
+from datetime import datetime
+
+
+class Creds:
+    def __init__(self, pcap):
+        self.pcap = pcap
+        self.fd = open(self.pcap, 'r')
+        self.dpkt = dpkt.pcap.Reader(self.fd)
+
+    def _timestamp(self, ts):
+        ts = datetime.fromtimestamp(int(ts))
+        return ts.strftime('%y-%m-%d %H:%M:%S')
+
+    def _filter(self, body):
+        keys = ['user', 'usr', 'name', 'id', 'admin', 'root', 'email'
+                'guest', 'customer', 'signin', 'nickname', 'handle',
+                'surname', 'label', 'login', 'account' 'pass',
+                'pwd', 'secret', 'auth', 'key', 'phrase']
+        for key in keys:
+            if re.search(key, body):
+                return True
+
+    def run(self):
+        for ts, buf in self.dpkt:
+            try:
+                eth = dpkt.ethernet.Ethernet(buf)
+                ip = eth.data
+                tcp = ip.data
+                http = dpkt.http.Request(tcp.data)
+                if self._filter(http.body):
+                    src = '%s:%s' % (socket.inet_ntoa(ip.src), tcp.sport)
+                    host = http.headers['host']
+                    msg = '%s -> %s\n%s\n\n' % (src, host, http.body)
+                    sys.stdout.write(msg)
+            except:pass
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pcap", help="pcap file")
+    args = parser.parse_args()
+    Cr = Creds(args.pcap)
+    Cr.run()
