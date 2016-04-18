@@ -1,0 +1,43 @@
+#!/usr/bin/env python
+import re
+import sys
+import dpkt
+import socket
+import argparse
+
+
+class Mac:
+    def __init__(self, pcap, user_filter):
+        self.pcap = pcap
+        self.fd = open(self.pcap, 'r')
+        self.user_filter = user_filter
+
+    def _filter(self, user_agent):
+        if not self.user_filter:
+            return True
+        elif re.search(self.user_filter, user_agent):
+            return True
+        return False
+
+    def run(self):
+        for ts, buf in dpkt.pcap.Reader(self.fd):
+            try:
+                eth = dpkt.ethernet.Ethernet(buf)
+                ip = eth.data
+                ip_src = socket.inet_ntoa(ip.src)
+                tcp = ip.data
+                http = dpkt.http.Request(tcp.data)
+                if self._filter(http.headers['user-agent']):
+                    sys.stdout.write("%s -> %s\t%s\n" % (ip_src,
+                                                        http.headers['host'],
+                                                        http.headers['user-agent']))
+            except:pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pcap", help="pcap file")
+    parser.add_argument("-f", "--filter", help="filter on ip address")
+    args = parser.parse_args()
+    m = Mac(args.pcap, args.filter)
+    m.run()

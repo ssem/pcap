@@ -1,0 +1,38 @@
+#!/usr/bin/env python
+import re
+import sys
+import dpkt
+import argparse
+
+
+class Mac:
+    def __init__(self, pcap, mac_filter):
+        self.pcap = pcap
+        self.fd = open(self.pcap, 'r')
+        self.mac_filter = mac_filter
+
+    def _filter(self, mac):
+        if not self.mac_filter:
+            return True
+        elif re.search(self.mac_filter, mac):
+            return True
+        return False
+
+    def run(self):
+        for ts, buf in dpkt.pcap.Reader(self.fd):
+            try:
+                eth = dpkt.ethernet.Ethernet(buf)
+                mac_src = ":".join("%02x" % ord(b) for b in eth.src)
+                mac_dst = ":".join("%02x" % ord(b) for b in eth.dst)
+                if self._filter(mac_src) or self._filter(mac_dst):
+                    sys.stdout.write("%s -> %s\n" % (mac_src, mac_dst))
+            except:pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pcap", help="pcap file")
+    parser.add_argument("-f", "--filter", help="filter on mac address")
+    args = parser.parse_args()
+    m = Mac(args.pcap, args.filter)
+    m.run()

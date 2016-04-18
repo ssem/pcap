@@ -1,0 +1,51 @@
+#!/usr/bin/env python
+import re
+import sys
+import dpkt
+import socket
+import argparse
+
+
+class Mac:
+    def __init__(self, pcap, ip_filter):
+        self.pcap = pcap
+        self.fd = open(self.pcap, 'r')
+        self.ip_filter = ip_filter
+
+    def _non_routable(self, ip):
+        if ip.startswith('192.168.'):
+            return True
+        elif ip.startswith('10.'):
+            return True
+        for x in xrange(16, 32):
+            if ip.startswith('172.%s.' % x):
+                return True
+        return False
+
+    def _filter(self, ip):
+        if not self.ip_filter:
+            return True
+        elif re.search(self.ip_filter, ip):
+            return True
+        return False
+
+    def run(self):
+        for ts, buf in dpkt.pcap.Reader(self.fd):
+            try:
+                eth = dpkt.ethernet.Ethernet(buf)
+                ip = eth.data
+                ip_src = socket.inet_ntoa(ip.src)
+                ip_dst = socket.inet_ntoa(ip.dst)
+                if self._non_routable(ip_src) or self._non_routable(ip_dst):
+                    if self._filter(ip_src) or self._filter(ip_dst):
+                        sys.stdout.write("%s -> %s\n" % (ip_src, ip_dst))
+            except:pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pcap", help="pcap file")
+    parser.add_argument("-f", "--filter", help="filter on ip address")
+    args = parser.parse_args()
+    m = Mac(args.pcap, args.filter)
+    m.run()

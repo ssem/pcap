@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if [ $# -ne 1 ];
+then
+    echo "Usage: <pcapng>"
+    exit 1
+fi
+
+editcap -F libpcap $1 /tmp/pcap
+mv /tmp/pcap $1

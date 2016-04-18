@@ -1,0 +1,28 @@
+#!/bin/bash
+
+if [ $# -eq 0 ];
+then
+    echo "Usage: pcap"
+    exit 1
+fi
+
+mkdir /tmp/stats
+
+tshark -r $1 -z afp,srt -z ancp,tree -z ansi_a, -z bacapp_instanceid,tree -z bacapp_ip,tree -z bacapp_objectid,tree -z bacapp_service,tree -z bootp,stat, -z camel,counter -z camel,srt -z collectd,tree -z dests,tree -z diameter,avp -z expert -z gsm_a, -z h225,counter -z h225,srt -z hart_ip,tree -z hosts -z http,stat, -z http,tree -z http_req,tree -z http_srv,tree -z icmp,srt -z icmpv6,srt -z io,phs -z ip_hosts,tree -z isup_msg,tree -z mac-lte,stat -z mgcp,rtd -z plen,tree -z ptype,tree -z radius,rtd -z rlc-lte,stat -z rpc,programs -z rtp,streams -z rtsp,stat, -z rtsp,tree -z sametime,tree -z sctp,stat -z sip,stat -z smb,srt -z smpp_commands,tree -z sv -z ucp_messages,tree -z wsp,stat, > /tmp/stats/tshark.tmp
+
+awk '/===================================================================/{n++}{print > "/tmp/stats/" n ".txt"}' /tmp/stats/tshark.tmp
+
+rm /tmp/stats/tshark.tmp
+
+OUTDIR=$(date +%F)-$(basename $1 | cut -d . -f1)
+mkdir $OUTDIR
+for FILE in `ls /tmp/stats`; do
+    FILE=/tmp/stats/$FILE
+    LINECOUNT=`wc -l $FILE | cut -f1 -d' '`
+    if [ $LINECOUNT -gt 2 ]; then
+        NAME=$(sed '2q;d' $FILE | cut -f1 | sed 's/[\ =\/:_#|.-]//g')".stat"
+        mv $FILE $OUTDIR/$NAME
+    fi
+done
+
+rm -r /tmp/stats
