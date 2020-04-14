@@ -1,0 +1,16 @@
+#!/bin/bash
+
+if [ $# -ne 1 ];then
+    echo -e "\n\tUsage: $0 <pcap>\n"
+    exit
+fi
+INFILE=$(realpath $1)
+TMPDIR=$(tempfile)
+CWD=$PWD
+
+rm $TMPDIR
+mkdir $TMPDIR
+cd $TMPDIR
+chaosreader $INFILE
+cd $CWD
+mv $TMPDIR .
