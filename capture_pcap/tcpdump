@@ -1,3 +1,10 @@
 #!/bin/bash
 
-sudo tcpdump $@
+if [ $# -ne 2 ];then
+    echo -e "\n\tUsage: $0 <iface> <outfile>\n"
+    exit
+fi
+IFACE=$1
+OUTFILE=$2
+
+sudo tcpdump -i $IFACE -w $OUTFILE
