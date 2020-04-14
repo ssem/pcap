@@ -1,8 +1,0 @@
-#!/usr/bin/env python
-
-import sys
-import requests
-
-for line in requests.get('http://standards.ieee.org/develop/regauth/oui/oui.txt').content.split('\n'):
-    if '(base 16)' in line:
-        sys.stdout.write('%s:%s:%s===%s,,,' % (line[2:4].lower(), line[4:6].lower(), line[6:8].lower(), line[24:]))

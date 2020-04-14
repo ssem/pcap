@@ -1,0 +1,13 @@
+#!/bin/bash
+
+if [ $# -ne 2 ]; then
+    echo -e "\n\tUsage: $0 <iface> <outfile>\n"
+    exit
+fi
+
+IFACE='$1'
+OUTFILE='$2'
+
+sudo airmon-ng stop mon0
+sudo airmon-ng start $IFACE
+sudo tcpdump -i mono0 -w $OUTFILE
